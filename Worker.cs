@@ -1,4 +1,4 @@
-namespace FileWatching;
+namespace CP_FleetDataJob;
 
 public class Worker : BackgroundService
 {
@@ -13,10 +13,6 @@ public class Worker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _watcher.Start();
-        while (!stoppingToken.IsCancellationRequested)
-        {
-
-        }
+        _ = Task.Run(() => _watcher.Start());
     }
 }

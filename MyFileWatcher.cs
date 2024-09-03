@@ -1,26 +1,32 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace FileWatching
+﻿namespace CP_FleetDataJob
 {
     public class MyFileWatcher : IMyFileWatcher
     {
-        private string _directoryName = Path.Join(Environment.CurrentDirectory, "files");//change this to whatever you want
-        private string _fileFilter = "*.*";
+        private string _mainDirectory;
+        private string _errorDirectory;
+        private string _successDirectory;
+        private string _fileFilter = "*.csv";
         FileSystemWatcher _fileSystemWatcher;
         ILogger<MyFileWatcher> _logger;
+        CustomLogs _customLogs;
         IServiceProvider _serviceProvider;
 
-        public MyFileWatcher(ILogger<MyFileWatcher> logger, IServiceProvider serviceProvider)
+        public MyFileWatcher(ILogger<MyFileWatcher> logger, IServiceProvider serviceProvider, CustomLogs customLogs)
         {
+            var configuration = new ConfigurationBuilder().SetBasePath(Directory.GetCurrentDirectory())
+            .AddJsonFile("appsettings.json").Build();
+
+            _mainDirectory = configuration.GetSection("FilePaths").GetValue<string>("main");
+            _errorDirectory = configuration.GetSection("FilePaths").GetValue<string>("fail");
+            _successDirectory = configuration.GetSection("FilePaths").GetValue<string>("success");
+
             _logger = logger;
-            if(!Directory.Exists(_directoryName))
-                Directory.CreateDirectory(_directoryName);
-            _fileSystemWatcher = new FileSystemWatcher(_directoryName, _fileFilter);
+            if (!Directory.Exists(_mainDirectory))
+                Directory.CreateDirectory(_mainDirectory);
+            
+            _fileSystemWatcher = new FileSystemWatcher(_mainDirectory, _fileFilter);
             _serviceProvider = serviceProvider;
+            _customLogs = customLogs;
         }
 
         public void Start()
@@ -34,45 +40,40 @@ namespace FileWatching
                                  | NotifyFilters.Security
                                  | NotifyFilters.Size;
 
-            _fileSystemWatcher.Changed += _fileSystemWatcher_Changed;
             _fileSystemWatcher.Created += _fileSystemWatcher_Created;
-            _fileSystemWatcher.Deleted += _fileSystemWatcher_Deleted;
-            _fileSystemWatcher.Renamed += _fileSystemWatcher_Renamed;
-            _fileSystemWatcher.Error += _fileSystemWatcher_Error;
-
 
             _fileSystemWatcher.EnableRaisingEvents = true;
             _fileSystemWatcher.IncludeSubdirectories = true;
 
-            _logger.LogInformation($"File Watching has started for directory {_directoryName}");
+            _logger.LogInformation($"File Watching has started for directory {_mainDirectory}");
         }
 
-        private void _fileSystemWatcher_Error(object sender, ErrorEventArgs e)
+        private async void _fileSystemWatcher_Created(object sender, FileSystemEventArgs e)
         {
-            _logger.LogInformation($"File error event {e.GetException().Message}");
-        }
-
-        private void _fileSystemWatcher_Renamed(object sender, RenamedEventArgs e)
-        {
-            _logger.LogInformation($"File rename event for file {e.FullPath}");
-        }
-
-        private void _fileSystemWatcher_Deleted(object sender, FileSystemEventArgs e)
-        {
-            _logger.LogInformation($"File deleted event for file {e.FullPath}");
-        }
-
-        private void _fileSystemWatcher_Changed(object sender, FileSystemEventArgs e)
-        {
-        }
-
-        private void _fileSystemWatcher_Created(object sender, FileSystemEventArgs e)
-        {
-            using (var scope = _serviceProvider.CreateScope())
+            try
             {
-                var consumerService = scope.ServiceProvider.GetRequiredService<IFileConsumerService>();
-                Task.Run(() => consumerService.ConsumeFile(e.FullPath));
+                using (var scope = _serviceProvider.CreateScope())
+                {
+                    var consumerService = scope.ServiceProvider.GetRequiredService<IFileConsumerService>();
+                    bool success = await consumerService.ConsumeFile(e.FullPath);
+
+                    string destination = success
+                        ? Path.Combine(_successDirectory, $"{DateTime.Now:yyyyMMddHHmmss_}{e.Name}")
+                        : Path.Combine(_errorDirectory, $"{DateTime.Now:yyyyMMddHHmmss_}{e.Name}");
+
+                    File.Move(e.FullPath, destination);
+
+                    string status = success ? "Success" : "Error";
+                    await _customLogs.LogError($"File processed with status: {status}", e.Name, status);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Task failed with error: {ex.Message}");
+                await _customLogs.LogError(ex.Message, e.Name);
+                File.Move(e.FullPath, Path.Combine(_errorDirectory, $"{DateTime.Now:yyyyMMddHHmmss_}{e.Name}"));
             }
         }
+
     }
 }

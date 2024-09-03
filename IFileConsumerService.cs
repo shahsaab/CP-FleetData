@@ -4,10 +4,10 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace FileWatching
+namespace CP_FleetDataJob
 {
     public interface IFileConsumerService
     {
-        public Task ConsumeFile(string pathToFile); 
+        public Task<bool> ConsumeFile(string pathToFile); 
     }
 }
